@@ -1,0 +1,31 @@
+[project]
+  name            = "devkit-claude-hooks"
+  version         = "1.0.0"
+  description     = "Claude Code hooks for devkit-managed projects: the devkit-hook binary that devkit setup-project wires into .claude/settings.local.json"
+  readme          = "README.md"
+  requires-python = ">=3.14"
+  dependencies    = []
+
+[dependency-groups]
+  dev = ["aeth-devkit>=12.1.0", "maturin>=1.7,<2"]
+
+[build-system]
+  requires      = ["maturin>=1.7,<2"]
+  build-backend = "maturin"
+
+[tool.maturin]
+  bindings      = "bin"
+  module-name   = "devkit_claude_hooks"
+  python-source = "python"
+
+[tool.poe]
+  include_script = [{ script = "aeth_devkit:tasks", executor = { type = "uv", frozen = true } }]
+
+[tool.uv.sources]
+  aeth-devkit = [{ index = "SFTPyPI" }]
+
+[[tool.uv.index]]
+  name        = "SFTPyPI"
+  url         = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/+simple"
+  publish-url = "https://pypi.sweetfiretobacco.com/jacob.ogden/internal/"
+  explicit    = true

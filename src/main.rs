@@ -11,8 +11,8 @@ fn main() -> ExitCode {
   //
   // `--help` and `--version` also arrive here as `Err`; `print` emits them on stdout (and a
   // real error on stderr), which keeps the binary usable by hand without ever exiting non-zero.
-  match aeth_devkit_hooks::Args::try_parse() {
-    Ok(args) => aeth_devkit_hooks::run_real(&args),
+  match devkit_claude_hooks::Args::try_parse() {
+    Ok(args) => devkit_claude_hooks::run_real(&args),
     Err(e) => {
       let _ = e.print();
       ExitCode::SUCCESS

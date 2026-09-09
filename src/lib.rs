@@ -1,4 +1,4 @@
-//! `devkit hook <name>` — Claude Code hooks, ported from the per-repo Python scripts.
+//! `devkit-hook <name>` — Claude Code hooks, installed into every devkit-managed project by `devkit setup-project`.
 //!
 //! Every hook has the same shape: Claude pipes a JSON payload describing the event to stdin,
 //! and the hook may print one JSON object to stdout telling Claude what to do. Printing
@@ -7,6 +7,7 @@
 //! silence rather than to an error.
 
 mod pre;
+pub mod process;
 mod stop;
 
 use std::io::Write as _;
@@ -17,7 +18,7 @@ use clap::{Parser, ValueEnum};
 // `Deserialize` is the derive that lets serde build a struct straight from JSON.
 use serde::Deserialize;
 
-use aeth_devkit_core::process::Runner;
+use crate::process::Runner;
 
 /// Which hook to run. `ValueEnum` lets clap parse the kebab-case name (`pre-edit-protect`)
 /// directly into the variant, so the CLI and the enum can never drift apart.
@@ -101,7 +102,7 @@ pub fn run_real(args: &Args) -> ExitCode {
     .map(std::path::PathBuf::from)
     .or_else(|_| std::env::current_dir())
     .unwrap_or_else(|_| std::path::PathBuf::from("."));
-  if let Some(decision) = run(args.hook, &payload, &project_dir, &aeth_devkit_core::process::SystemRunner) {
+  if let Some(decision) = run(args.hook, &payload, &project_dir, &crate::process::SystemRunner) {
     // `println!` *panics* when stdout is gone -- Claude killing the hook at its configured
     // timeout, or a session interrupt, both do that. A panic exits 101, which is the hook
     // error this crate exists to avoid, so the write failure is swallowed instead.
