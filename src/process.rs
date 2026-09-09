@@ -140,3 +140,29 @@ impl Runner for RecordingRunner {
     )
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn recording_runner_answers_from_the_last_matching_script() {
+    let r = RecordingRunner::new(3);
+    r.script("uv", &["run"], 0, "broad\n");
+    r.script("uv", &["run", "ruff"], 1, "narrow\n");
+    // Both prefixes match; the later, narrower script wins. A longer argument list still
+    // matches because only the prefix has to agree.
+    let out = r
+      .run_capture("uv", &["run".into(), "ruff".into(), "check".into()], Path::new("/proj"))
+      .unwrap();
+    assert_eq!((out.code, out.stdout.as_str(), out.success()), (Some(1), "narrow\n", false));
+    let out = r.run_capture("uv", &["run".into(), "pyright".into()], Path::new("/proj")).unwrap();
+    assert_eq!((out.code, out.stdout.as_str()), (Some(0), "broad\n"));
+    // No script for `git`: the default exit code, no output, and the call is still recorded.
+    let out = r.run_capture("git", &["status".into()], Path::new("/proj")).unwrap();
+    assert_eq!((out.code, out.stdout.as_str()), (Some(3), ""));
+    assert_eq!(r.calls_for("uv").len(), 2);
+    assert_eq!(r.calls_for("git"), vec![vec!["status".to_string()]]);
+    assert_eq!(r.calls.borrow()[0].cwd, PathBuf::from("/proj"));
+  }
+}
