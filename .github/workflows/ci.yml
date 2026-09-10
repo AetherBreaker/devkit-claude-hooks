@@ -1,4 +1,4 @@
-name: CI
+name: "Verify: Rust checks, wheel"
 
 on:
   push:
@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   rust:
-    name: Rust (${{ matrix.os }})
+    name: "Rust: fmt, clippy, tests (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -26,17 +26,17 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Format
+      - name: cargo fmt --all --check
         run: cargo fmt --all --check
 
-      - name: Clippy
+      - name: cargo clippy --all-targets -- -D warnings
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Test
+      - name: cargo test
         run: cargo test
 
   wheel:
-    name: Wheel build (${{ matrix.os }})
+    name: "Wheel: maturin build, run devkit-hook --version (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -54,7 +54,7 @@ jobs:
           python-version: "3.14"
 
       # The wheel is what every project installs: the binary must ride in it as a script.
-      - name: Build the wheel and run the binary from a develop install
+      - name: maturin build, assert the devkit-hook script is in the wheel, maturin develop, devkit-hook --version
         shell: bash
         run: |
           uv sync
