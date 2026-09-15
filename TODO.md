@@ -16,3 +16,13 @@
     time that must not get swept in.
   - `stop-pyright` never fixes anything (report-only) and `stop-clean` only deletes
     generated files, so neither is in scope for this — only `stop-ruff` applies.
+
+- [ ] **`stop-pyright` runs pyright without the venv's interpreter** — `resolve()` in
+      `src/stop.rs` spawns `.venv/Scripts/pyright.exe` directly to skip `uv run`'s sync
+      check, but pyright then picks the interpreter from PATH to find site-packages. On a
+      machine where bare `python` is the Microsoft Store alias, the run prints "Python was
+      not found" and every import of an installed package is reported unresolved (seen on
+      aeth_devkit: 7 false errors per turn, 0 under `uv run pyright`). Fix on the venv fast
+      path: set `VIRTUAL_ENV` to the venv and prepend its `Scripts`/`bin` to PATH for the
+      child, or pass `--pythonpath <venv python>` to pyright. Ruff is unaffected (no
+      interpreter needed); `poe clean` goes through the same path and should be checked.
