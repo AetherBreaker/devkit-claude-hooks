@@ -22,7 +22,13 @@
       check, but pyright then picks the interpreter from PATH to find site-packages. On a
       machine where bare `python` is the Microsoft Store alias, the run prints "Python was
       not found" and every import of an installed package is reported unresolved (seen on
-      aeth_devkit: 7 false errors per turn, 0 under `uv run pyright`). Fix on the venv fast
-      path: set `VIRTUAL_ENV` to the venv and prepend its `Scripts`/`bin` to PATH for the
-      child, or pass `--pythonpath <venv python>` to pyright. Ruff is unaffected (no
+      aeth_devkit: 7 false errors per turn, 0 under `uv run pyright`; and on
+      ScheduledInvoiceProcessor: ~20 false errors per turn, including knock-on
+      `reportUnnecessaryTypeIgnoreComment` hits where the unresolved types turn Unknown).
+      The noise repeats after every turn, so it trains everyone to ignore the hook.
+      Requirement: pyright must analyse against the project's own venv interpreter whatever
+      PATH the hook inherits, with results matching `uv run pyright`. The approach is open:
+      the same venv setup `uv run` would give the child process, handing pyright the
+      interpreter explicitly, dropping the fast path for pyright, or something else — pick
+      whatever holds up on Windows and Linux venv layouts. Ruff is unaffected (no
       interpreter needed); `poe clean` goes through the same path and should be checked.
