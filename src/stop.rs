@@ -1,5 +1,6 @@
 //! Stop hooks: run a checker and hand its complaints back to Claude as context.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
@@ -59,9 +60,15 @@ pub const CLEAN: Tool = Tool {
 ///
 /// `uv run` spends ~140 ms checking the environment is in sync before it starts the tool.
 /// That is the right default for a human at a shell, but a hook runs after *every* turn, so
-/// we go straight to the binary when the venv has one. Returns the program to spawn and the
-/// arguments to put in front of the tool's own.
-fn resolve(project_dir: &Path, tool: &Tool) -> (String, Vec<String>) {
+/// we go straight to the binary when the venv has one. Returns the program to spawn, the
+/// arguments to put in front of the tool's own, and the environment to add.
+///
+/// The direct path still gets the environment `uv run` would give: `VIRTUAL_ENV` and the
+/// venv's script directory first on PATH. Pyright finds site-packages by running `python`
+/// from PATH, and on a machine whose bare `python` is the Microsoft Store alias it otherwise
+/// reports every installed import as unresolved. `poe clean` and whatever it spawns resolve
+/// `python` the same way.
+fn resolve(project_dir: &Path, tool: &Tool) -> (String, Vec<String>, Vec<(String, OsString)>) {
   let venv = project_dir.join(".venv");
   // Windows venvs put console scripts in `Scripts/` with an `.exe` suffix; Unix in `bin/`.
   // Checking both means the same binary behaves on either platform without `cfg!` gates.
@@ -70,11 +77,18 @@ fn resolve(project_dir: &Path, tool: &Tool) -> (String, Vec<String>) {
     venv.join("bin").join(tool.name),
   ];
   // `into_iter` on an array (edition 2021+) yields owned `PathBuf`s; `find` hands back the
-  // first that exists; `map` turns it into the `(program, no prefix)` pair.
+  // first that exists.
   if let Some(exe) = candidates.into_iter().find(|p| p.is_file()) {
-    return (exe.to_string_lossy().into_owned(), Vec::new());
+    let scripts = exe.parent().map(Path::to_path_buf).unwrap_or_default();
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let mut env = vec![("VIRTUAL_ENV".to_string(), venv.into_os_string())];
+    // `join_paths` only fails on a separator inside an entry; leave PATH alone then.
+    if let Ok(path) = std::env::join_paths(std::iter::once(scripts).chain(std::env::split_paths(&inherited))) {
+      env.push(("PATH".to_string(), path));
+    }
+    return (exe.to_string_lossy().into_owned(), Vec::new(), env);
   }
-  ("uv".to_string(), vec!["run".to_string(), tool.name.to_string()])
+  ("uv".to_string(), vec!["run".to_string(), tool.name.to_string()], Vec::new())
 }
 
 /// The Python files this branch has touched, or `None` for "no branch scope — whole project".
@@ -178,7 +192,7 @@ pub fn scope(project_dir: &Path, runner: &dyn Runner) -> Option<Vec<String>> {
 
 /// Run `tool` in `project_dir` and, if it failed *and* said something, report that.
 pub fn check(project_dir: &Path, tool: &Tool, runner: &dyn Runner) -> Option<Value> {
-  let (program, mut args) = resolve(project_dir, tool);
+  let (program, mut args, env) = resolve(project_dir, tool);
   args.extend(tool.args.iter().map(|s| s.to_string()));
 
   // The label tells Claude how much was actually examined, so a clean report is not
@@ -200,7 +214,7 @@ pub fn check(project_dir: &Path, tool: &Tool, runner: &dyn Runner) -> Option<Val
   }
 
   // `.ok()?`: a spawn error (tool not installed) becomes `None` — silence, not a hook error.
-  let out = runner.run_capture(&program, &args, project_dir).ok()?;
+  let out = runner.run_capture_env(&program, &args, &env, project_dir).ok()?;
   if out.success() {
     return None;
   }

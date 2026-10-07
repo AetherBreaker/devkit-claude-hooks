@@ -14,8 +14,9 @@ as a hook error in every session.
   value-taking global flags — not a regex).
 - **Stop hooks** - Re-report tool failures as `additionalContext`: `stop-ruff` (`--fix
   --unfixable F401`) scoped to the branch diff, `stop-pyright` project-wide on purpose,
-  `stop-clean` (`poe clean`); venv binaries preferred over `uv run`; output capped at
-  4000 chars; `stop_hook_active` loop guard.
+  `stop-clean` (`poe clean`); venv binaries preferred over `uv run`, run with the
+  venv first on PATH and `VIRTUAL_ENV` set as `uv run` would; output capped at 4000
+  chars; `stop_hook_active` loop guard.
 
 ## Develop
 

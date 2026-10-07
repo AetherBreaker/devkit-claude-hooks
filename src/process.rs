@@ -4,6 +4,7 @@
 //! test seam is not worth a dependency edge (devkit split spec, section 3).
 
 use std::cell::RefCell;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -23,18 +24,27 @@ impl CapturedOutput {
   }
 }
 
+/// Variables set on the child on top of the inherited environment.
+pub type Env = [(String, OsString)];
+
 pub trait Runner {
-  /// Run `program args` in `cwd` and capture stdout and stderr.
-  fn run_capture(&self, program: &str, args: &[String], cwd: &Path) -> Result<CapturedOutput>;
+  /// Run `program args` in `cwd` with `env` added, and capture stdout and stderr.
+  fn run_capture_env(&self, program: &str, args: &[String], env: &Env, cwd: &Path) -> Result<CapturedOutput>;
+
+  /// [`Runner::run_capture_env`] with the inherited environment unchanged.
+  fn run_capture(&self, program: &str, args: &[String], cwd: &Path) -> Result<CapturedOutput> {
+    self.run_capture_env(program, args, &[], cwd)
+  }
 }
 
 /// Spawns for real.
 pub struct SystemRunner;
 
 impl Runner for SystemRunner {
-  fn run_capture(&self, program: &str, args: &[String], cwd: &Path) -> Result<CapturedOutput> {
+  fn run_capture_env(&self, program: &str, args: &[String], env: &Env, cwd: &Path) -> Result<CapturedOutput> {
     let out = Command::new(program)
       .args(args)
+      .envs(env.iter().map(|(k, v)| (k, v)))
       .current_dir(cwd)
       .output()
       .with_context(|| format!("running {program}"))?;
@@ -51,6 +61,7 @@ impl Runner for SystemRunner {
 pub struct Invocation {
   pub program: String,
   pub args: Vec<String>,
+  pub env: Vec<(String, OsString)>,
   pub cwd: PathBuf,
 }
 
@@ -114,10 +125,11 @@ impl RecordingRunner {
 }
 
 impl Runner for RecordingRunner {
-  fn run_capture(&self, program: &str, args: &[String], cwd: &Path) -> Result<CapturedOutput> {
+  fn run_capture_env(&self, program: &str, args: &[String], env: &Env, cwd: &Path) -> Result<CapturedOutput> {
     self.calls.borrow_mut().push(Invocation {
       program: program.to_string(),
       args: args.to_vec(),
+      env: env.to_vec(),
       cwd: cwd.to_path_buf(),
     });
     let scripts = self.scripts.borrow();

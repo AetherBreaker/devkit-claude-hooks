@@ -134,6 +134,8 @@ fn malformed_stdin_is_silent() {
 
 // ---- Stop hooks ------------------------------------------------------------------------
 
+// Stop tests run in a fresh temp dir: a `.venv` in the checkout would otherwise be resolved
+// ahead of the scripted `uv run`.
 fn context(out: Option<String>) -> Option<String> {
   out.map(|s| {
     let v: Value = serde_json::from_str(&s).unwrap();
@@ -146,7 +148,7 @@ fn context(out: Option<String>) -> Option<String> {
 fn stop_ruff_reports_output_on_failure() {
   let runner = RecordingRunner::new(1);
   runner.script("uv", &["run", "ruff"], 1, "src/x.py:1:1: E501 too long\n");
-  let ctx = context(run(Hook::StopRuff, "{}", Path::new("."), &runner)).expect("must report");
+  let ctx = context(run(Hook::StopRuff, "{}", tempfile::tempdir().unwrap().path(), &runner)).expect("must report");
   assert_eq!(ctx, "ruff check (project-wide) reported issues:\nsrc/x.py:1:1: E501 too long");
 }
 
@@ -184,23 +186,39 @@ fn stop_hooks_prefer_the_venv_binary() {
       .find(|c| c.program == exe.to_string_lossy())
       .unwrap_or_else(|| panic!("ruff via venv {subdir}"));
     assert_eq!(ruff.args, ["check", "--fix", "--unfixable", "F401", "."]);
+    // What `uv run` would set: without the venv first on PATH, pyright resolves `python` to
+    // whatever PATH offers (the Store alias, on Windows) and loses site-packages.
+    let env = |key: &str| ruff.env.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+    assert_eq!(env("VIRTUAL_ENV").unwrap(), dir.path().join(".venv").into_os_string());
+    let path = env("PATH").expect("PATH set");
+    assert_eq!(std::env::split_paths(&path).next().unwrap(), scripts);
   }
+}
+
+#[test]
+fn uv_run_sets_up_its_own_environment() {
+  let runner = RecordingRunner::new(0);
+  run(Hook::StopPyright, "{}", tempfile::tempdir().unwrap().path(), &runner);
+  assert_eq!(runner.calls.borrow()[0].env, []);
 }
 
 #[test]
 fn stop_hooks_are_silent_on_success_or_empty_output() {
   let ok = RecordingRunner::new(0);
   ok.script("uv", &["run"], 0, "all good\n");
-  assert_eq!(run(Hook::StopPyright, "{}", Path::new("."), &ok), None);
+  assert_eq!(run(Hook::StopPyright, "{}", tempfile::tempdir().unwrap().path(), &ok), None);
   let quiet_failure = RecordingRunner::new(1);
-  assert_eq!(run(Hook::StopClean, "{}", Path::new("."), &quiet_failure), None);
+  assert_eq!(
+    run(Hook::StopClean, "{}", tempfile::tempdir().unwrap().path(), &quiet_failure),
+    None
+  );
 }
 
 #[test]
 fn stop_hooks_concatenate_stdout_and_stderr() {
   let runner = RecordingRunner::new(1);
   runner.script_err("uv", &["run", "pyright"], 1, "  boom  ");
-  let ctx = context(run(Hook::StopPyright, "{}", Path::new("."), &runner)).unwrap();
+  let ctx = context(run(Hook::StopPyright, "{}", tempfile::tempdir().unwrap().path(), &runner)).unwrap();
   assert_eq!(ctx, "pyright (project-wide) reported issues:\nboom");
 }
 
@@ -209,7 +227,7 @@ fn stop_output_is_truncated_to_4000_chars_on_a_char_boundary() {
   let runner = RecordingRunner::new(1);
   let long = "é".repeat(5000); // 2 bytes each: byte-slicing at 4000 would split a char
   runner.script("uv", &["run", "ruff"], 1, &long);
-  let ctx = context(run(Hook::StopRuff, "{}", Path::new("."), &runner)).unwrap();
+  let ctx = context(run(Hook::StopRuff, "{}", tempfile::tempdir().unwrap().path(), &runner)).unwrap();
   let body = ctx.split_once('\n').unwrap().1;
   assert_eq!(body.chars().count(), 4000);
 }
@@ -217,14 +235,20 @@ fn stop_output_is_truncated_to_4000_chars_on_a_char_boundary() {
 /// A runner whose spawn itself fails — the tool is not installed at all.
 struct FailingRunner;
 impl devkit_claude_hooks::process::Runner for FailingRunner {
-  fn run_capture(&self, _: &str, _: &[String], _: &Path) -> anyhow::Result<devkit_claude_hooks::process::CapturedOutput> {
+  fn run_capture_env(
+    &self,
+    _: &str,
+    _: &[String],
+    _: &devkit_claude_hooks::process::Env,
+    _: &Path,
+  ) -> anyhow::Result<devkit_claude_hooks::process::CapturedOutput> {
     anyhow::bail!("program not found")
   }
 }
 
 #[test]
 fn stop_hooks_are_silent_when_the_tool_cannot_be_spawned() {
-  assert_eq!(run(Hook::StopRuff, "{}", Path::new("."), &FailingRunner), None);
+  assert_eq!(run(Hook::StopRuff, "{}", tempfile::tempdir().unwrap().path(), &FailingRunner), None);
 }
 
 // ---- branch-diff scoping (stop-ruff only) ----------------------------------------------
@@ -385,7 +409,7 @@ fn on_main_or_detached_head_ruff_runs_project_wide() {
 #[test]
 fn outside_a_git_repo_ruff_runs_project_wide() {
   let runner = RecordingRunner::new(128); // every git call fails
-  run(Hook::StopRuff, "{}", Path::new("."), &runner);
+  run(Hook::StopRuff, "{}", tempfile::tempdir().unwrap().path(), &runner);
   assert_eq!(ruff_targets(&runner), ["."]);
 }
 
