@@ -17,6 +17,10 @@ as a hook error in every session.
   `stop-clean` (`poe clean`); venv binaries preferred over `uv run`, run with the
   venv first on PATH and `VIRTUAL_ENV` set as `uv run` would; output capped at 4000
   chars; `stop_hook_active` loop guard.
+- **`stop-ruff` commits its fixes** - Files `--fix` rewrote that had no uncommitted
+  changes before it ran are committed as `style: apply ruff's safe fixes` (`git commit
+  --only`, so other staged work stays staged); files already being edited keep the fix
+  uncommitted. Skipped on a detached HEAD. A failure report notes the commit.
 
 ## Develop
 

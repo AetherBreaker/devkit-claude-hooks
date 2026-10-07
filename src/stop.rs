@@ -23,6 +23,8 @@ pub struct Tool {
   pub label: &'static str,
   /// Whether to narrow this tool to the branch's changed files (see [`scope`]).
   pub scoped: bool,
+  /// Whether the files this run rewrites get committed (see [`commit_fixes`]).
+  pub commits_fixes: bool,
 }
 
 pub const RUFF: Tool = Tool {
@@ -36,6 +38,7 @@ pub const RUFF: Tool = Tool {
   args: &["check", "--fix", "--unfixable", "F401"],
   label: "ruff check",
   scoped: true,
+  commits_fixes: true,
 };
 
 pub const PYRIGHT: Tool = Tool {
@@ -46,6 +49,7 @@ pub const PYRIGHT: Tool = Tool {
   // possibly outside the branch diff. Narrowing pyright would hide exactly the regressions
   // it exists to catch, so it always runs whole-project.
   scoped: false,
+  commits_fixes: false,
 };
 
 pub const CLEAN: Tool = Tool {
@@ -54,6 +58,7 @@ pub const CLEAN: Tool = Tool {
   label: "poe clean",
   // Deletes generated files; it has no per-file output to narrow.
   scoped: false,
+  commits_fixes: false,
 };
 
 /// Where to find `tool`: the venv's own console script if it exists, else `uv run`.
@@ -190,6 +195,51 @@ pub fn scope(project_dir: &Path, runner: &dyn Runner) -> Option<Vec<String>> {
   Some(files)
 }
 
+/// The paths `git status` lists as changed or untracked, repo-root-relative; `None` outside
+/// a repo. `-z` leaves paths unquoted; a rename entry carries its source as an extra field.
+fn dirty(project_dir: &Path, runner: &dyn Runner) -> Option<Vec<String>> {
+  let args = ["status", "--porcelain=v1", "-z", "--untracked-files=all"].map(String::from);
+  let out = runner.run_capture("git", &args, project_dir).ok()?;
+  if !out.success() {
+    return None;
+  }
+  let mut paths = Vec::new();
+  let mut fields = out.stdout.split('\0');
+  while let Some(entry) = fields.next() {
+    // Each entry is `XY path`; the empty field after the final `\0` has no path.
+    let Some(path) = entry.get(3..) else { continue };
+    if entry.starts_with(['R', 'C']) {
+      fields.next();
+    }
+    paths.push(path.to_string());
+  }
+  Some(paths)
+}
+
+/// Commit the files `--fix` rewrote that had no uncommitted changes before it ran; returns
+/// how many. A file already dirty keeps the fix mixed into that unfinished work instead, so
+/// the automatic commit never carries anything but ruff's edits.
+///
+/// `--only` commits just these paths from the worktree, leaving anything else the user has
+/// staged untouched. A detached HEAD (mid-rebase, usually) is skipped: a commit there would
+/// land inside the rebase. Any git failure means no commit, silently.
+fn commit_fixes(project_dir: &Path, before: &[String], runner: &dyn Runner) -> Option<usize> {
+  let fixed: Vec<String> = dirty(project_dir, runner)?.into_iter().filter(|p| !before.contains(p)).collect();
+  if fixed.is_empty() {
+    return None;
+  }
+  let git = |args: Vec<String>| runner.run_capture("git", &args, project_dir).ok().filter(|o| o.success());
+  git(["symbolic-ref", "-q", "HEAD"].map(String::from).to_vec())?;
+  let mut args = ["commit", "--only", "-m", "style: apply ruff's safe fixes", "--"]
+    .map(String::from)
+    .to_vec();
+  // Status paths are repo-root-relative, pathspecs cwd-relative: `top` bridges a hook run
+  // from a subdirectory, `literal` keeps a `[` or `*` in a filename from globbing.
+  args.extend(fixed.iter().map(|p| format!(":(top,literal){p}")));
+  git(args)?;
+  Some(fixed.len())
+}
+
 /// Run `tool` in `project_dir` and, if it failed *and* said something, report that.
 pub fn check(project_dir: &Path, tool: &Tool, runner: &dyn Runner) -> Option<Value> {
   let (program, mut args, env) = resolve(project_dir, tool);
@@ -213,8 +263,13 @@ pub fn check(project_dir: &Path, tool: &Tool, runner: &dyn Runner) -> Option<Val
     }
   }
 
+  // Taken before `--fix`, so the commit can tell ruff's edits from work already in the tree.
+  let before = if tool.commits_fixes { dirty(project_dir, runner) } else { None };
   // `.ok()?`: a spawn error (tool not installed) becomes `None` — silence, not a hook error.
   let out = runner.run_capture_env(&program, &args, &env, project_dir).ok()?;
+  // Before the pass/fail branch: `stop_hook_active` skips the continued turn a failure
+  // causes, so this is the only chance to commit what `--fix` already changed.
+  let committed = before.and_then(|before| commit_fixes(project_dir, &before, runner));
   if out.success() {
     return None;
   }
@@ -225,10 +280,12 @@ pub fn check(project_dir: &Path, tool: &Tool, runner: &dyn Runner) -> Option<Val
   if text.is_empty() {
     return None;
   }
+  // The commit moved HEAD; say so, or the next `git status` looks like the fixes vanished.
+  let note = committed.map_or_else(String::new, |n| format!("\n(its safe fixes to {n} file(s) were committed)"));
   Some(json!({
     "hookSpecificOutput": {
       "hookEventName": "Stop",
-      "additionalContext": format!("{label} reported issues:\n{text}"),
+      "additionalContext": format!("{label} reported issues:\n{text}{note}"),
     }
   }))
 }
